@@ -15,9 +15,10 @@
 #	3 - Error checking out branch                #
 #                                                    #
 ######################################################
-folder_name=
+doc_version=
 root_folder=
 debug=false
+push=false
 
 # The branch that the docs are going to go on.
 pages_branch=gh-pages
@@ -28,14 +29,16 @@ orig_branch=$(git symbolic-ref --short -q HEAD)
 if [ -z $orig_branch ]
 then
 	echo "ERROR: Not on a branch or project is not a git repo"
+	eixt 1
 fi
 
 function usage {
 	echo -e "Usage: $0 [-d] [-f OUT_FOLDER] -r ROOT_FOLDER" 1>&2
 	echo -e "Where: " 1>&2
 	echo -e "\td	Debug Mode" 1>&2
-	echo -e "\tf	Specify the folder that the documentation will be built to" 1>&2
+	echo -e "\tv	Specify the documentation version number" 1>&2
 	echo -e "\tr	Root folder (absolute) for the project" 1>&2
+	echo -e "\tp	Push documentation to gh-pages branch on github" 1>&2
 	exit 1
 }
 
@@ -58,11 +61,16 @@ function debug {
 	fi
 }
 
-while getopts "f:dr:" arg
+while getopts "v:dpr:" arg
 do
 	case $arg in
-	f)
-		folder_name=$OPTARG
+	v)
+		if [ -e $OPTARG ]
+		then 
+			doc_version=
+		else
+			doc_version="-Ddoc.version=$OPTARG"
+		fi
 		;;
 	d)
 		debug=true
@@ -73,6 +81,9 @@ do
 	h)	
 		usage
 		;;
+	p)
+		push=true
+		;;
 	esac
 done
 
@@ -81,56 +92,69 @@ then
 	echo "ERROR: Project root must be supplied" 1>&2
 	usage
 fi
+
 checkabspath $root_folder
 
-# We check to see if folder name is still empty
-# if it is then we try to get the branch name
-if [[ -z $folder_name ]]
-then
-	folder_name=$orig_branch
-fi
-
-# If it is still empty then we error and exit
-if [[ -z $folder_name ]] 
-then
-	echo "ERROR: No folder supplied and cannot determine branch)"
-	exit 2
-fi
-
-debug "Document Folder name: ${folder_name}"
+debug "Document version: ${doc_version}"
 
 debug "Changing to root folder: ${root_folder}"
 pushd $root_folder >/dev/null
 
 debug "Deleting previously built documentation in ${root_folder}/target"
-rm -rf ${root_folder}/target/*
+#rm -rf ${root_folder}/target/*
+
+
+mvn clean
 
 debug "Generating javadoc using maven"
-mvn javadoc:aggregate
+mvn ${doc_version} javadoc:aggregate
 
 debug "checking out the github pages branch $pages_branch"
 git checkout $pages_branch
 
 if [[ ! $? == 0 ]]
 then
-	echo "ERROR: Could not checkout branch $pages_branch"
+	echo "ERROR: Could not checkout branch $pages_branch"  >&2
 	exit 3
 fi
 
-debug "making directory ${root_folder}/api/${folder_name}"
-mkdir -p ${root_folder}/api/${folder_name}
+debug "making api directory incase it does not exist"
+mkdir -p ${root_folder}/api/
 
-debug "Copying files from target to ${folder_name}"
-cp -rf ${root_folder}/target/site/apidocs/* ${root_folder}/api/${folder_name}/
+debug "Copying files from target to ${doc_version}"
+cp -rf ${root_folder}/target/site/apidocs/* ${root_folder}/api/
 
 debug "Adding all files under api directory"
-git add api/*
+git add api/* > /dev/null 2>&1
+
+if [[ ! $? == 0 ]]
+then
+	echo "ERROR: Could not perform git add command" >&2
+	exit 3
+fi
 
 debug "Committing files"
-git commit -m "Updated ${folder_name} documentation"
+git commit -m "Updated $(echo $doc_version | cut -d'=' -f2) documentation - $(date)" > /dev/null 2>&1
 
-debug "Pushing gh-pages to github"
-git push origin gh-pages
+if [[ ! $? == 0 ]]
+then
+	echo "ERROR: Could not perform git commit command" >&2
+	exit 3
+fi
+
+if [ push = true ]
+then
+	debug "Pushing gh-pages to github"
+	git push origin gh-pages
+	
+	if [[ ! $? == 0 ]]
+	then
+		echo "ERROR: Could not perform git push command" >&2
+		exit 3
+	fi
+fi
 
 debug "Returning to original directory"
 popd
+
+git checkout $orig_branch
